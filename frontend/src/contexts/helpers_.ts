@@ -12,7 +12,6 @@ import { Token, TOKEN_PROGRAM_ID, AccountLayout, MintLayout } from "@solana/spl-
 //import { TokenInfo } from '@solana/spl-token-registry';
 import * as borsh from 'borsh';
 import bs58 from 'bs58';
-import * as anchor from '@project-serum/anchor';
 import {
   NFTRecord1,
   RecordSchema1,
@@ -26,22 +25,20 @@ import {
 } from './utils';
 import axios from 'axios';
 import BN from 'bn.js';
-import fs from 'fs';
 import { WalletContextState } from '@solana/wallet-adapter-react';
 import { programs, Connection, actions } from '@metaplex/js';
 import { Data, updateMetadata, Creator, createMetadata } from './metadata';
-
-import { IDL } from './anchor_idl/idl/hall_of_hero';
-
 const { metaplex: { Store, AuctionManager }, auction: { Auction }, vault: { Vault }, metadata: {Metadata} } = programs;
+
 
 const solConnection = new web3.Connection(web3.clusterApiUrl("devnet"));
 
 const PDA_SEED = "hallofheros";
 const NFT_RECORD_SPACE = 250; // RECORD_MAX_SIZE
 const RECORD_CNT = 16;
+
 const REPO_PROGRAM_ID = new PublicKey(
-  "5TTYCcZJG8nckYcSe5EUtABGzKXiMtNDg6SJNYhX5gwD"
+  "ADKQSZo6gWSKWYPWjRVbnovkLtsn3jWGV69oLYoXvcom"
 );
 const TOKEN_METADATA_PROGRAM_ID = new PublicKey(
   "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
@@ -50,7 +47,7 @@ const SPL_ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID: PublicKey = new PublicKey(
   'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL',
 );
 const REPO_ACCOUNT_PUBKEY = new PublicKey(
-  "B9tTWxpmRBDTFQDpu2EzLTk7v7QkdN3t3pgTKpLJMgzX"
+  "HyWFCwGmE1rQipaNWHsa8YvphYNFqgowfZc3LmXqXo4m"
 );
 const DEAD_NFT_URI = "https://arweave.net/RZc2Tofy92aiWDZcb574VXHGzJHMssvBPnCmr_Uo0UM";
 
@@ -58,47 +55,60 @@ const ADMIN_KEY_PAIR = Keypair.fromSecretKey(
   //bs58.decode("4o7bg2vu3TD8SY2M1rBZXtYvYAbXXUQSx8VU97BEQqoz4AfWAwmhzssLcxvxLXPctEcmCcap8Kd3iQrWnhgcMcgZ")
   new Uint8Array([166,131,100,248,20,124,18,55,184,173,190,64,234,175,37,130,60,128,135,120,228,183,27,65,69,76,209,208,53,79,220,17,31,165,240,23,153,231,78,125,144,127,227,98,175,2,129,5,191,45,52,105,72,143,174,90,65,128,144,232,80,176,75,21])
 );
-/*const ADMIN_KEY_PAIR = Keypair.fromSecretKey(
-  bs58.decode("4o7bg2vu3TD8SY2M1rBZXtYvYAbXXUQSx8VU97BEQqoz4AfWAwmhzssLcxvxLXPctEcmCcap8Kd3iQrWnhgcMcgZ")
-);*/ 
 
 export const updateRecord = async (nftId: number, nftKey: PublicKey, price: BN, contentURI: string, wallet: WalletContextState) => {
   console.log(nftId + '  ' + nftKey.toBase58() + '  ' + price.toString() + '  uri=', contentURI);
+  
+  let args = new UpdateNFTArgs ({
+    hero_id: nftId,
+    key_nft: nftKey.toBytes(),
+    new_price: price,
+    content_uri: contentURI
+  });
 
+  let instructionInfo = borsh.serialize(UpdateNFTSchema, args);
+
+  let buffer = Buffer.concat([Buffer.from(Uint8Array.of(1)), Buffer.from(instructionInfo)]);
+
+  let nfts_metadata = await solConnection.getProgramAccounts(
+    TOKEN_METADATA_PROGRAM_ID,
+    {
+      filters: [
+        {
+          memcmp: {
+            offset: 33,
+            bytes: nftKey.toBase58()
+          }
+        }
+      ]
+    }
+  );
+  
+  if (nfts_metadata.length === 0) return;
   if (! wallet.publicKey) return;
-  let cloneWindow: any = window;
-  
-  console.log("pubkey =",ADMIN_KEY_PAIR.publicKey.toBase58());
-  console.log("updateRecord cloneWindow['solana'] = ", cloneWindow['solana']);
-  
-  //let anchor_wallet = new anchor.Wallet(ADMIN_KEY_PAIR);
-  let provider = new anchor.Provider(solConnection, cloneWindow['solana'], anchor.Provider.defaultOptions())
-  const program = new anchor.Program(IDL, REPO_PROGRAM_ID, provider);
-  
-  let associatedTokenAccount = await getNFTTokenAccount(nftKey);
 
-  console.log("updater =", wallet.publicKey.toBase58());
-  console.log("associatedTokenAccount =", associatedTokenAccount.toBase58());
+  let associatedTokenAccount = await getNFTTokenAccount(nftKey);//await getAssociatedTokenAccount(wallet.publicKey, nftKey);
+  console.log("NFTTokenAccount=", associatedTokenAccount.toBase58());
 
-  let result = await program.rpc.updateRecord(nftId, contentURI, new anchor.BN(price), {
-    accounts: {
-      updater: wallet.publicKey,
-      repository: REPO_ACCOUNT_PUBKEY,
-      nftMint: nftKey,
-      associatedTokenAccount
-    },
-    signers: []
-  }).catch(error => {
+  const instruction = new TransactionInstruction({
+    keys: [
+      {pubkey: wallet.publicKey, isSigner: true, isWritable: false},
+      {pubkey: REPO_ACCOUNT_PUBKEY, isSigner: false, isWritable: true},
+      {pubkey: nftKey, isSigner: false, isWritable: false},
+      {pubkey: associatedTokenAccount, isSigner: false, isWritable: false},
+    ],
+    programId: REPO_PROGRAM_ID,
+    data: buffer,
+  });
+  let result = await wallet.sendTransaction(new Transaction().add(instruction), solConnection).catch(error => {
     showToast(error, 1);
   });
   if (result !== undefined) {
-    showToast("Successfully changed. txHash=" + result, 0);
+    showToast("Successfully changed.", 0);
     return true;
   }
   return false;
 }
-
-
 export const getRecords = async () :Promise<ContentRecord[]> => {
   let records : NFTRecord1[] = await getRepoAccountInfo();
   let contents : ContentRecord[] = records.map(r => (new ContentRecord({
@@ -179,97 +189,6 @@ const getRepoAccountInfo = async () : Promise<NFTRecord1[]> => {
 }
 
 export const buyNFT = async (nftData: ContentRecord, nftKey: PublicKey, wallet: WalletContextState) => {
-  if (!wallet.publicKey) return;
-
-  console.log("buyNFT nftKey =", nftKey.toBase58());
-  let { mintAccount, tokenAccount } = await mintNewNFT(nftData);
-
-  //await updateMetadataV2(nftKey);
-  
-  const prevOwnerPK = await getOwnerOfNFT(nftKey);
-
-  let nfts_metadata = await solConnection.getProgramAccounts(
-    TOKEN_METADATA_PROGRAM_ID,
-    {
-      filters: [
-        {
-          memcmp: {
-            offset: 33,
-            bytes: nftKey.toBase58()
-          }
-        }
-      ]
-    }
-  );
-  if (nfts_metadata.length === 0) return;
-  
-  let old_nft_account_pk = await getNFTTokenAccount(nftKey); 
-  let nft_account_pk_to_send = tokenAccount.publicKey;
-  let {
-    tempNFTTokenAccountKeypair, 
-    createTempTokenAccountIx, 
-    initTempAccountIx} = await createReceiveTokenAccountIx(wallet.publicKey, mintAccount.publicKey);
-
-  //let tempNFTTokenAccountKeypair = await getToReceiveTokenAccount(buyerKeyPair.publicKey, mintAccount.publicKey);
-  let nft_account_pk_to_receive = tempNFTTokenAccountKeypair.publicKey;//new PublicKey("DJNwjdLbeBpc9zZ4m1zRLDHbnjcw3yPbB8Gs3dSRReA4");//await getToReceiveTokenAccount(buyerKeyPair.publicKey, nftKey); 
-  //let nft_account_pk_to_receive = await getToSendTokenAccount(buyerKeyPair.publicKey, nftKey); 
-
-  let oldNFTmetadataAccount = await Metadata.getPDA(nftKey);
-
-  console.log("before buy");
-  console.log("walletKeyPair.publicKey =", ADMIN_KEY_PAIR.publicKey.toBase58());
-  console.log("buyerKeyPair.publicKey =", wallet.publicKey.toBase58());
-  console.log("prevOwnerPK =", prevOwnerPK.toBase58());
-  console.log("nftKey =", nftKey.toBase58());
-  console.log("old_nft_account_pk =", old_nft_account_pk.toBase58());
-  console.log("oldNFTmetadataAccount =", oldNFTmetadataAccount.toBase58());
-
-  console.log("newNftMint =", mintAccount.publicKey.toBase58());
-  console.log("nft_account_pk_to_send =", nft_account_pk_to_send.toBase58());
-  console.log("nft_account_pk_to_receive =", nft_account_pk_to_receive.toBase58());
-
-  console.log("TOKEN_PROGRAM_ID =", TOKEN_PROGRAM_ID.toBase58());
-  console.log("SystemProgram =", SystemProgram.programId.toBase58());
-
-
-  let cloneWindow: any = window;
-  let provider = new anchor.Provider(solConnection, cloneWindow['solana'], anchor.Provider.defaultOptions())
-  const program = new anchor.Program(IDL, REPO_PROGRAM_ID, provider);
-  
-  let result = await program.rpc.buyRecord(nftData.hero_id, DEAD_NFT_URI, "DEAD Seat", {
-    accounts: {
-      initializer: ADMIN_KEY_PAIR.publicKey,
-      buyer: wallet.publicKey,
-      prevOwner: prevOwnerPK,
-      repository: REPO_ACCOUNT_PUBKEY,
-      deadNftMint: nftKey,
-      deadNftTokenAccount: old_nft_account_pk,
-      deadNftMetadataAccount: oldNFTmetadataAccount,
-
-      newNftMint: mintAccount.publicKey,
-      nftTokenAccountToSend: nft_account_pk_to_send,
-      nftTokenAccountToReceive: nft_account_pk_to_receive,
-
-      tokenProgram: TOKEN_PROGRAM_ID,
-      tokenMetadataProgram: TOKEN_METADATA_PROGRAM_ID,
-      systemProgram: SystemProgram.programId
-    },
-    instructions:[
-      createTempTokenAccountIx,
-      initTempAccountIx
-    ],
-    signers: [ADMIN_KEY_PAIR, tempNFTTokenAccountKeypair]
-  }).catch(error => {
-    showToast(error, 1);
-  });
-  if (result !== undefined) {
-    showToast("Successfully bought. txHash=" + result, 0);
-    return true;
-  }
-  return false;
-}
-
-export const buyNFT_ = async (nftData: ContentRecord, nftKey: PublicKey, wallet: WalletContextState) => {
   if (!wallet.publicKey) return;
   console.log("buyNFT nftKey =", nftKey.toBase58());
   let { mintAccount, tokenAccount } = await mintNewNFT(nftData);
