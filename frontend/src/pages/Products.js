@@ -14,8 +14,7 @@ import {
   withdrawFromFixed, 
   getLotteryState, 
   getFixedState, 
-  getGlobalState,
-  claimReward
+  getGlobalState
 } from '../contexts/helpers';
 import { getDateStr, getReward } from '../contexts/utils';
 
@@ -82,11 +81,6 @@ export default function EcommerceShop() {
       updateLotteryPoolState(wallet.publicKey)
     });
   }
-  const onClaimReward = () => {
-    claimReward(wallet).then(() => {
-      updateLotteryPoolState(wallet.publicKey)
-    })
-  }
   const onStakeToFixed = () => {
     stakeToFixed(wallet, fixedNftMint).then(() => {
       updateFixedPoolState(wallet.publicKey)
@@ -99,9 +93,7 @@ export default function EcommerceShop() {
   }
   return (
       <Page title="Dashboard: Products | Minimal-UI" ml={5}>
-          <button onClick={() => onInitClick()} style={{height: '70px'}}>Init Project</button>
-          <button onClick={() => onClaimReward()} style={{height: '70px', marginLeft: '20px'}}>Claim Reward</button>
-          <br/>
+          <button onClick={() => onInitClick()}>Init Project</button>
           <Grid container spacing={2}>
             <Grid item xs={5}>
               <Stack direction="column" spacing={2}>
